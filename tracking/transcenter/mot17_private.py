@@ -128,7 +128,7 @@ def get_args_parser():
     parser.add_argument('--coco_panargsic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
 
-    parser.add_argument('--output_dir', default='',
+    parser.add_argument('--output_dir', default='/home/huangjinze/data',
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
@@ -271,13 +271,17 @@ def main(tracktor, reid):
     # load reid network
     reid_network = resnet50(pretrained=False, **reid['cnn'])
     print(f"Loading Reid Model {tracktor['reid_weights']}")
-    reid_network.load_state_dict(torch.load(curr_pth + "/model_zoo/" + tracktor['reid_weights'],
+    reid_network.load_state_dict(torch.load(curr_pth + "./model_zoo/" + tracktor['reid_weights'],
                                             map_location=lambda storage, loc: storage))
     reid_network.eval()
     reid_network.cuda()
 
     # tracker
-    tracker = Tracker(model, reid_network, liteFlowNet, tracktor['tracker'], postprocessor=postprocessors['bbox'], main_args=main_args)
+    tracker = Tracker(
+        model, reid_network, liteFlowNet,
+        tracktor['tracker'], postprocessor=postprocessors['bbox'],
+        main_args=main_args
+    )
     tracker.public_detections = False
 
     # dataloader
@@ -287,11 +291,11 @@ def main(tracktor, reid):
 
     models = [
         # "./model_zoo/MOT17_fromCoCo.pth",
-        "./model_zoo/MOT17_fromCH.pth"
+        curr_pth + "./model_zoo/MOT17_fromCH.pth"
     ]
     output_dirs = [
         # curr_pth + '/test_models/mot17_fromCoCo_test_private/',
-        curr_pth + '/test_models/mot17_fromCH_test_private/',
+        curr_pth + './test_models/mot17_fromCH_test_private/',
 
     ]
 
@@ -405,10 +409,10 @@ def main(tracktor, reid):
             del pub_dets
 
 
-with open(curr_pth + '/cfgs/detracker_reidV3.yaml', 'r') as f:
+with open(curr_pth + './cfgs/detracker_reidV3.yaml', 'r') as f:
     tracktor = yaml.load(f)['tracktor']
 
-with open(curr_pth+ '/cfgs/reid.yaml', 'r') as f:
+with open(curr_pth+ './cfgs/reid.yaml', 'r') as f:
     reid = yaml.load(f)['reid']
     # print(reid)
 

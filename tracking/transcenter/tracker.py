@@ -52,7 +52,10 @@ class Tracker:
     # only track pedestrian
     cl = 1
 
-    def __init__(self, obj_detect, reid_network, flownet, tracker_cfg, postprocessor=None, main_args=None):
+    def __init__(
+            self, obj_detect, reid_network, flownet,
+            tracker_cfg, postprocessor=None, main_args=None
+    ):
         self.obj_detect = obj_detect
         self.reid_network = reid_network
         self.detection_nms_thresh = tracker_cfg['detection_nms_thresh']
@@ -66,6 +69,13 @@ class Tracker:
         self.motion_model_cfg = tracker_cfg['motion_model']
         self.postprocessor = postprocessor
         self.main_args = main_args
+
+        self.match_info = {}
+        if main_args.output_dir != '':
+            if not os.path.exists(main_args.output_dir):
+                os.makedirs(main_args.output_dir)
+            self.matching_process_file = os.path.join(main_args.output_dir, 'matching.txt')
+            self.file_obj = open(self.matching_process_file, 'w+')
 
         # self.tracks = []
         self.inactive_tracks = []
@@ -98,6 +108,86 @@ class Tracker:
             self.track_num = 0
             self.results = {}
             self.im_index = 0
+
+    def record_matching(self, log_key, log_value):
+        if log_key == 'image':
+            # image 信息主体
+            blob = log_value['blob']
+            # image 数据
+            ori_img = blob['img'].clone().detach().cpu().numpy()[0].transpose(1, 2, 0)
+            cv_img = np.ascontiguousarray(ori_img).copy()
+
+            # 当前帧检测的结果
+            all_detection_pos = log_value['all_detection_pos'].clone().detach().cpu().numpy()
+            # 历史跟踪数据
+            all_tracklets_pos = log_value['all_tracklets_pos'].clone().detach().cpu().numpy()
+            # 经过外观模型重新分配的轨迹和目标检测信息
+            assigned_infos = log_value['assigned_infos']
+
+            # 用黑色粗框画出当前未分配的检测框
+            for i in range(all_detection_pos.shape[0]):
+                cv2.rectangle(cv_img, (int(all_detection_pos[i][0]), int(all_detection_pos[i][1])),
+                              (int(all_detection_pos[i][2]), int(all_detection_pos[i][3])),
+                              (0, 0, 0), 3)
+
+            # 用绿色的框画出当前所有未匹配的跟踪路径
+            for i in range(all_tracklets_pos.shape[0]):
+                # green with 1 thickness
+                cv2.rectangle(cv_img, (int(all_tracklets_pos[i][0]), int(all_tracklets_pos[i][1])),
+                              (int(all_tracklets_pos[i][2]), int(all_tracklets_pos[i][3])), (255, 255, 0), 1)
+
+            # 最终处理为drop的结果
+            for assigned_info in assigned_infos:
+                assigned_pos = assigned_info['assign_pos'].cpu().numpy()
+                tracker_pos = assigned_info['tracker_pos'].cpu().numpy()
+                loss = assigned_info['loss']
+                # 下边框处： 检测
+                cv2.putText(
+                    cv_img, "assigned",
+                    (int(assigned_pos[2]), int(assigned_pos[3])+20),
+                    cv2.FONT_HERSHEY_PLAIN,
+                    0.7, (0, 0, 0), 1
+                )
+
+                # 上边竖框处： 跟踪轨迹
+                cv2.putText(
+                    cv_img, "tracker",
+                    (int(tracker_pos[0]), int(tracker_pos[1])-20),
+                    cv2.FONT_HERSHEY_PLAIN,
+                    0.7, (255, 255, 0), 1
+                )
+
+                cv2.putText(
+                    cv_img, f"loss: {str(round(loss, 2))} < {self.reid_sim_threshold}",
+                    (
+                        (int(assigned_pos[0]) + int(assigned_pos[2])) // 2,
+                        (int(assigned_pos[1]) + int(assigned_pos[3])) // 2
+                    ),
+                    cv2.FONT_HERSHEY_PLAIN,
+                    0.8, (0, 0, 255), 1)
+
+            # # 最终处理为 reactivate 的结果
+            # for itracker in reactivate_list:
+            #     # red，reactivate
+            #     remove_pos = list(itracker.pos[0].cpu().numpy())
+            #     cv2.rectangle(cv_img, (int(remove_pos[0]), int(remove_pos[1])),
+            #                   (int(remove_pos[2]), int(remove_pos[3])), (255,0,0), 1)
+            #     cv2.putText(
+            #         cv_img, str(f"reactivate"),
+            #         (int(remove_pos[0]), (int(remove_pos[1])+int(remove_pos[3]))//2),
+            #         cv2.FONT_HERSHEY_PLAIN,
+            #         0.7,
+            #         (255,0,0),
+            #         1)
+            matching_process_img = os.path.join(self.main_args.output_dir, 'error', blob['video_name'])
+            if not os.path.exists(matching_process_img):
+                os.makedirs(matching_process_img)
+            cv2.imwrite(
+                os.path.join(
+                    matching_process_img,
+                    blob['frame_name']
+                ), cv_img * 255
+            )
 
     def linear_assignment(self, cost_matrix, thresh):
         if cost_matrix.size == 0:
@@ -186,7 +276,6 @@ class Tracker:
                 new_pos.append(t.pos.clone())
         try:
             return torch.Tensor(s[::-1]).cuda(), torch.cat(new_pos[::-1], dim=0), None, [pos_birth, scores_birth]
-
         except:
             return torch.zeros(0).cuda(), torch.zeros(0, 4).cuda(), torch.zeros(0).cuda(), [pos_birth, scores_birth]
 
@@ -262,9 +351,19 @@ class Tracker:
         new_det_features = [torch.zeros(0).cuda() for _ in range(len(new_det_pos))]
 
         if self.do_reid:
+            # record seq name [MOT17-01-SDP] and frame name [000005.jpg]
+            # self.record_matching(
+            #     'update',
+            #     {
+            #         'video_name': blob['video_name'],
+            #         'frame_name': blob['frame_name'],
+            #     }
+            # )
+
             new_det_features = self.reid_network.test_rois(
                 blob['img'], new_det_pos).detach()
 
+            # 针对 跟踪又剩余、检测也有剩余的情况
             if len(self.inactive_tracks) >= 1:
                 # calculate appearance distances
                 dist_mat, pos = [], []
@@ -279,6 +378,10 @@ class Tracker:
                     dist_mat = dist_mat[0]
                     pos = pos[0]
 
+                # record the tracklets and detection
+                detection_pos = new_det_pos.clone()
+                tracklets_pos = pos.clone()
+
                 # calculate IoU distances
                 iou = bbox_overlaps(pos, new_det_pos)
                 iou_mask = torch.ge(iou, self.reid_iou_threshold)
@@ -287,13 +390,25 @@ class Tracker:
                 dist_mat = dist_mat * iou_mask.float() + iou_neg_mask.float() * 1000
                 dist_mat = dist_mat.cpu().numpy()
 
+                # row_ind 是历史轨迹的索引，col_ind 是检测的索引
                 row_ind, col_ind = linear_sum_assignment(dist_mat)
 
+                # 如果检测框匹配上某条轨迹，则保存该检测框的id
                 assigned = []
+                # 如果检测框分配给某一个轨迹，存储该轨迹上一帧的position和 loss
+                assigned_infos = []
+                # 如果检测框分配给某一个轨迹，存储该轨迹的信息，该轨迹需要被reactivate
                 remove_inactive = []
                 for r, c in zip(row_ind, col_ind):
+                    # 如果找到相似的，对于tracker 来说，把检测结果添加到本tracklet中
+                    # 对于检测来说，assigned过
                     if dist_mat[r, c] <= self.reid_sim_threshold:
                         t = self.inactive_tracks[r]
+                        assigned_infos.append({
+                            "assign_pos": new_det_pos[c].clone(),
+                            "tracker_pos": t.pos[0].clone(),
+                            "loss": dist_mat[r, c],
+                        })
                         self.tracks.append(t)
                         t.count_inactive = 0
                         t.pos = new_det_pos[c].view(1, -1)
@@ -305,6 +420,16 @@ class Tracker:
                 for t in remove_inactive:
                     self.inactive_tracks.remove(t)
 
+                # try:
+                self.record_matching('image', {
+                    'blob': blob,
+                    'all_detection_pos': detection_pos,  # 所有未匹配上的检测结果
+                    'all_tracklets_pos': tracklets_pos,  # 所有未匹配上的跟踪轨迹的位置
+                    'assigned_infos': assigned_infos,  # 当前认为已经匹配上的检测结果
+                })
+                # except:
+                #     print("not save")
+                # 保留下那些没有被匹配过的
                 keep = torch.Tensor([i for i in range(new_det_pos.size(0)) if i not in assigned]).long().cuda()
                 if keep.nelement() > 0:
                     new_det_pos = new_det_pos[keep]
@@ -337,7 +462,6 @@ class Tracker:
                     # todo check shape and format
                     t.pos = warp_pos(t.pos, self.flow)
 
-
     @torch.no_grad()
     def step_reidV3_pre_tracking(self, blob):
         """This function should be called every timestep to perform tracking with a blob
@@ -367,7 +491,6 @@ class Tracker:
         det_pos = raw_private_det_pos
         det_scores = raw_private_det_scores
         det_pre_cts = pre_cts
-
 
         ##################
         # Predict tracks #
@@ -405,7 +528,7 @@ class Tracker:
             # case 1: No pub det, private dets OR
             # case 2: No pub det, no private dets
 
-            if len(blob['dets'])==0:
+            if len(blob['dets']) == 0:
                 det_pos = torch.zeros(0, 4).cuda()
                 det_scores = torch.zeros(0).cuda()
 
@@ -460,7 +583,9 @@ class Tracker:
             # print(t)
             if t.id not in self.results.keys():
                 self.results[t.id] = {}
-            self.results[t.id][self.im_index] = np.concatenate([t.pos[0].cpu().numpy(), np.array([t.score])])
+            self.results[t.id][self.im_index] = np.concatenate([
+                t.pos[0].cpu().numpy(), np.array([t.score.cpu()])
+            ])
 
         for t in self.inactive_tracks:
             t.count_inactive += 1
@@ -475,7 +600,6 @@ class Tracker:
         # reuse pre_features
         self.pre_img_features = self.img_features
         self.pre_encoder_pos_encoding = self.encoder_pos_encoding
-
 
     @torch.no_grad()
     def step_reidV3_pre_tracking_mot20(self, blob):
