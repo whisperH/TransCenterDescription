@@ -41,7 +41,7 @@ import util.misc as utils
 from datasets.coco_eval import CocoEvaluator
 
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
+def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, matcher: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0, adaptive_clip: bool=False):
     model.train()
@@ -50,7 +50,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('grad_norm', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 50
+    print_freq = 2
 
     for ret in metric_logger.log_every(data_loader, print_freq, header):
         samples = utils.NestedTensor(ret['image'], ret['pad_mask'])
@@ -58,12 +58,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         pre_samples = utils.NestedTensor(ret['pre_img'], ret['pre_pad_mask'])
         pre_hm = ret['pre_hm'].to(device)
         pre_samples = pre_samples.to(device)
-
         targets = {k: v.to(device) for k, v in ret.items() if
-                   k != 'orig_image' and k != 'image' and 'pad_mask' not in k and 'pre_img' not in k}
+                    k != 'orig_image' and k != 'image' and 'pad_mask' not in k and 'pre_img' not in k}
 
         outputs = model(samples, pre_samples=pre_samples, pre_hm=pre_hm)
-        loss_dict = criterion(outputs, targets)
+        loss_dict = criterion(outputs, targets, matcher)
 
         weight_dict = criterion.weight_dict
 
@@ -75,7 +74,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                                       for k, v in loss_dict_reduced.items()}
         loss_dict_reduced_scaled = {k: v * weight_dict[k]
                                     for k, v in loss_dict_reduced.items() if k in weight_dict}
-        assert len(weight_dict.keys()) == len(loss_dict_reduced.keys())
+        # assert len(weight_dict.keys()) == len(loss_dict_reduced.keys())
 
         losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
 
@@ -107,7 +106,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         # torch.cuda.empty_cache()
 
-        metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
+        metric_logger.update(
+            loss=loss_value,
+            **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(grad_norm=grad_total_norm)
 
@@ -118,17 +119,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir):
+def evaluate(model, criterion, postprocessors, matcher, data_loader, base_ds, device, output_dir):
     model.eval()
-    criterion.eval()
-
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test:'
 
     iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
     # set max Dets to 300
-    coco_evaluator.coco_eval[iou_types[0]].params.maxDets = [300, 300, 300]
+    coco_evaluator.coco_eval[iou_types[0]].params.maxDets = [100, 100, 100]
 
     for ret in metric_logger.log_every(data_loader, 50, header):
         samples = utils.NestedTensor(ret['image'], ret['pad_mask'])
@@ -140,24 +139,12 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         targets = {k: v.to(device) for k, v in ret.items() if k != 'orig_image' and k != 'image' and 'pad_mask' not in k and 'pre_img' not in k}
 
         outputs = model(samples, pre_samples=pre_samples, pre_hm=pre_hm)
-        loss_dict = criterion(outputs, targets)
-        weight_dict = criterion.weight_dict
-
-        # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-
-        loss_dict_reduced_scaled = {k: v * weight_dict[k]
-                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
-        loss_dict_reduced_unscaled = {f'{k}_unscaled': v
-                                      for k, v in loss_dict_reduced.items()}
-        metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
-                             **loss_dict_reduced_scaled,
-                             **loss_dict_reduced_unscaled)
 
         results = postprocessors['bbox'](outputs, targets['orig_size'], filter_score=False)
         res = {img_id.item(): output for img_id, output in zip(targets['image_id'], results)}
         if coco_evaluator is not None:
             coco_evaluator.update(res)
+        del samples, pre_samples, pre_hm, targets, outputs
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

@@ -163,6 +163,7 @@ python -m torch.distributed.launch --nproc_per_node=4 --use_env ./training/trans
 ```
 cd TransCenter_official
 python -m torch.distributed.launch --nproc_per_node=2 --use_env ./training/transcenter/main_mot17_tracking.py --output_dir=./output/whole_MOT17_from_COCO --batch_size=2 --num_workers=20 --resume=./model_zoo/coco_pretrained.pth --pre_hm --tracking  --same_aug_pre --image_blur_aug --data_dir=PathToMOT17dataset
+python -m torch.distributed.launch --nproc_per_node=2 --use_env ./training/transcenter/main_mot17_tracking.py --output_dir=./output/whole_MOT17_from_COCO --batch_size=1 --num_workers=20 --resume=./training/transcenter/model_zoo/MOT17_fromCoCo.pth --pre_hm --tracking  --same_aug_pre --image_blur_aug
 ```
 
 - Train MOT17 from CrowdHuman pretrained model:

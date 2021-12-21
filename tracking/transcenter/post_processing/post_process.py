@@ -69,7 +69,7 @@ def generic_post_process(opt, dets, c, s, h, w, filter_by_scores=0.3):
 
       if 'tracking' in dets:
         # displacement to original image space
-        # in generic_dataset.py 中，tracking = pre_ct - ct_int
+        # in generic_dataset.py，tracking = pre_ct - ct_int
         tracking = transform_preds_with_trans(
           (dets['tracking'][i][j] + dets['cts'][i][j]).reshape(1, 2), trans).reshape(2)
         item['tracking'] = tracking - item['ct']  # ct in the ct int in original image plan

@@ -28,6 +28,7 @@
 ## (2) 2017 NVIDIA CORPORATION. (Apache License, Version 2.0: https://github.com/NVIDIA/flownet2-pytorch/tree/master/networks/correlation_package)
 ## (3) 2019 Simon Niklaus. (GNU General Public License v3.0: https://github.com/sniklaus/pytorch-liteflownet)
 ## (4) 2018 Tak-Wai Hui. (Copyright (c), see details in the LICENSE file: https://github.com/twhui/LiteFlowNet)
+## (5) https://stackoverflow.com/questions/67730325/using-weights-in-crossentropyloss-and-bceloss-pytorch
 # ------------------------------------------------------------------------------
 # Portions of this code are from
 # CornerNet (https://github.com/princeton-vl/CornerNet)
@@ -43,6 +44,8 @@ import torch.nn as nn
 from .utils import _tranpose_and_gather_feat, _nms, _topk
 import torch.nn.functional as F
 from util import box_ops
+from collections import OrderedDict
+
 
 def _slow_neg_loss(pred, gt):
     '''focal loss from CornerNet'''
@@ -129,7 +132,8 @@ class FastFocalLoss(nn.Module):
             return - neg_loss
         return - (pos_loss + neg_loss) / num_pos
 
-#todo check
+
+# todo check
 def loss_boxes(output, target):
     """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
        targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
@@ -156,13 +160,13 @@ def loss_boxes(output, target):
 
     # (reg_w, reg_h, w, h)] => cx, cy, w,h
     c_x_t = centers % img_w[:, None]
-    c_y_t = centers//img_w[:, None]
+    c_y_t = centers // img_w[:, None]
     pred[:, :, 0] += c_x_t
     pred[:, :, 1] += c_y_t
 
     # norm pred with output w, h
-    pred[:, :, 0::2]/= img_w[:, None, None]
-    pred[:, :, 1::2]/= img_h[:, None, None]
+    pred[:, :, 0::2] /= img_w[:, None, None]
+    pred[:, :, 1::2] /= img_h[:, None, None]
 
     # print("pred", pred)
     # print("target['boxes']", target['boxes'])
@@ -170,13 +174,12 @@ def loss_boxes(output, target):
     collect_pred = pred.view(-1, 4)[mask.view(-1) == 1, :]
     collect_tgt = target['boxes'].clone().view(-1, 4)[mask.view(-1) == 1, :]
 
-
     if collect_tgt.shape[0] > 0:
         loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
             box_ops.box_cxcywh_to_xyxy(collect_pred),
             box_ops.box_cxcywh_to_xyxy(collect_tgt)))
 
-        loss_giou = loss_giou.sum()/collect_tgt.shape[0]
+        loss_giou = loss_giou.sum() / collect_tgt.shape[0]
 
         # unnorm predict box_w, box_h
         scale_fct = torch.stack([torch.ones_like(img_w), torch.ones_like(img_h), img_w, img_h], dim=1)
@@ -191,9 +194,9 @@ def loss_boxes(output, target):
         # renorm target and predicted box_w, box_h by mean box_h of target and predicted
         target_boxes_unnorm[:, :, 2:] = target_boxes_unnorm[:, :, 2:] / predict_boxes_h_mean[:, :, None]
         pred[:, :, 2:] = pred[:, :, 2:] / predict_boxes_h_mean[:, :, None]
-        loss_bboxes = F.l1_loss(pred * mask[:, :,  None], target_boxes_unnorm * mask[:, :,  None], reduction='sum')
+        loss_bboxes = F.l1_loss(pred * mask[:, :, None], target_boxes_unnorm * mask[:, :, None], reduction='sum')
     else:
-        loss_bboxes = loss_giou = torch.sum(pred*0.0)
+        loss_bboxes = loss_giou = torch.sum(pred * 0.0)
 
     return loss_bboxes / (mask.sum() + 1e-4), loss_giou
 
@@ -242,6 +245,47 @@ class WeightedBCELoss(nn.Module):
         loss = mask * self.bceloss(pred, target)
         loss = loss.sum() / (mask.sum() + 1e-4)
         return loss
+
+
+class ContrastiveLoss(nn.Module):
+    def __init__(self, prject_in_feat, tao=0.05):
+        super(ContrastiveLoss, self).__init__()
+        self.prject_in_feat = prject_in_feat
+        self.tao = tao
+
+        self.simi_func = nn.CosineSimilarity(dim=1, eps=1e-6)
+
+        self.project_header = nn.Sequential(OrderedDict([
+            ('fc1', nn.Linear(prject_in_feat[0] * prject_in_feat[1], 1024)),
+            ('added_relu1', nn.LeakyReLU(inplace=True)),
+            ('fc2', nn.Linear(1024, 512)),
+            ('added_relu2', nn.LeakyReLU(inplace=True)),
+            ('fc3', nn.Linear(512, 128)),
+
+        ]))
+
+        self.bceloss = torch.nn.BCEWithLogitsLoss(
+            reduction='mean'
+        )
+
+    def forward(self, contra_g):
+        loss_list = []
+        all_loss = 0.0
+        for iobj, contra_info in contra_g.items():
+            label = contra_info['label']
+            feat = []
+            for ifeat in contra_info['feature']:
+                pair_size, channel_num, w, h = ifeat.shape
+                ifeat_proj_ = self.project_header(ifeat.squeeze().view(pair_size, w * h))
+                q, k = torch.chunk(ifeat_proj_, pair_size, 0)
+                feat.append(self.simi_func(q, k))
+            tensor_feat = torch.stack(feat).squeeze()
+            tensor_label = torch.tensor(label, dtype=torch.float).squeeze().to(tensor_feat.device)
+            loss = self.bceloss(tensor_feat, tensor_label)
+            all_loss += loss
+            loss_list.append(loss)
+
+        return all_loss / len(loss_list)
 
 
 class BinRotLoss(nn.Module):

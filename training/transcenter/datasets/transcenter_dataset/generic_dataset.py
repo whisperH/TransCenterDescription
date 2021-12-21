@@ -36,6 +36,7 @@ import numpy as np
 import math
 import json
 import cv2
+cv2.setNumThreads(0)
 import os
 from collections import defaultdict
 import pycocotools.coco as coco
@@ -44,9 +45,9 @@ import sys
 import platform
 
 curr_pth = os.path.abspath(__file__)
-if(platform.system()=='Windows'):
+if (platform.system() == 'Windows'):
     curr_pth = "\\".join(curr_pth.split("\\")[:-3])
-elif(platform.system()=='Linux'):
+elif (platform.system() == 'Linux'):
     curr_pth = "/".join(curr_pth.split("/")[:-3])
 sys.path.append(curr_pth)
 from util.image import flip, color_aug, GaussianBlur
@@ -94,6 +95,7 @@ class GenericDataset(data.Dataset):
 
     sf = 0.2
     cf = 0.1
+
     def __init__(self, opt=None, split=None, ann_path=None, img_dir=None):
         super(GenericDataset, self).__init__()
         if opt is not None and split is not None:
@@ -132,6 +134,8 @@ class GenericDataset(data.Dataset):
     def __getitem__(self, index):
         opt = self.opt
         img, anns, img_info, img_path, pad_img = self._load_data(index)
+        # assert len(anns) > 0, "no object in current frame"
+
         img_blurred = False
         if self.opt.image_blur_aug and np.random.rand() < 0.1 and self.split == 'train':
             # print("blur image")
@@ -163,45 +167,23 @@ class GenericDataset(data.Dataset):
         trans_output = get_affine_transform(
             c, s, rot, [opt.output_w, opt.output_h])
         inp, padding_mask = self._get_input(img, trans_input, padding_mask=pad_img)
+        #
+        inp_no_trans, padding_mask_no_trans = self._get_input(img, trans_input=None, padding_mask=pad_img)
 
-        # # # # plot inp, padding mask
-        # inp_to_plot = inp.copy().transpose(1, 2, 0)
-        # inp_to_plot *= self.std
-        # inp_to_plot += self.mean
-        # img_pil = Image.fromarray((inp_to_plot*255).astype(np.uint8))
-        # img_draw = ImageDraw.Draw(img_pil)
-        #
-        # for ann in anns:
-        #     if ann['iscrowd'] == 1:
-        #         color= (255, 0, 0, 255)
-        #     else:
-        #         color = (0, 255, 0, 255)
-        #     __, bb_amodal = self._get_bbox_output(
-        #         ann['bbox'], trans_input, height, width)
-        #     bb = np.array(bb_amodal, np.int).copy()
-        #     img_draw.rectangle([(bb[0], bb[1]), (bb[2], bb[3])], fill=None,
-        #                             outline=color)
-        #     img_draw.text((bb[2], bb[3]), str(ann['track_id']), fill=color)
-        #
-        # # img_pil.save(f"/scratch2/scorpio/yixu/see_hm/coco/{img_info['id']:06}.png")
-        # img_pil.save(f"D:\\data/dataset/track/train/cruise1/{img_info['id']:06}.png")
-        # mask_pil = Image.fromarray((padding_mask*255).astype(np.uint8))
-        # # mask_pil.save(f"/scratch2/scorpio/yixu/see_hm/coco/{img_info['id']:06}_pad.png")
-        # mask_pil.save(f"D:\\data/dataset/track/train/cruise1/{img_info['id']:06}_pad.png")
-        # # #
-        # # # plot #
         ret = {'image': inp, 'pad_mask': padding_mask.astype(np.bool)}
         # print(img.shape)
         # ret['orig_image'] = img
         gt_det = {'bboxes': [], 'scores': [], 'clses': [], 'cts': []}
 
         # get pre info, pre info has the same transform then current info
-        pre_cts, pre_track_ids = None, None
+        pre_cts, pre_track_ids, pre_track_info = None, None, None
         if opt.tracking:
             # randomly select a pre image with random interval
             pre_image, pre_anns, frame_dist, pre_img_id, pre_pad_image = self._load_pre_data(
                 img_info['video_id'], img_info['frame_id'],
                 img_info['sensor_id'] if 'sensor_id' in img_info else 1)
+            # assert len(pre_anns) > 0, "no object in previous frame"
+
 
             if self.opt.image_blur_aug and img_blurred and self.split == 'train':
                 # print("blur image")
@@ -226,70 +208,117 @@ class GenericDataset(data.Dataset):
             # transform pre_image as standard input shape, todo warning pre_anns are not yet transformed
             pre_img, pre_padding_mask = self._get_input(pre_image, trans_input_pre, padding_mask=pre_pad_image)
             # pre_hm is of standard input shape, todo pre_cts is in the output image plane
-            pre_hm, pre_cts, pre_track_ids = self._get_pre_dets(
-                pre_anns, trans_input_pre, trans_output_pre)
+            pre_hm, pre_cts, pre_track_ids, pre_track_info = self._get_pre_dets(
+                pre_anns, trans_input_pre, trans_output_pre, no_trans=False
+            )
             ret['pre_img'] = pre_img
             ret['pre_pad_mask'] = pre_padding_mask.astype(np.bool)
             if opt.pre_hm:
                 ret['pre_hm'] = pre_hm
 
-            # # # # # plot inp, padding mask todo plot boxes
-            # inp_to_plot = pre_img.copy().transpose(1, 2, 0)
-            # inp_to_plot *= self.std
-            # inp_to_plot += self.mean
-
-            # img_pil = Image.fromarray((inp_to_plot * 255).astype(np.uint8))
-            # img_draw = ImageDraw.Draw(img_pil)
-            #
-            # for pre_ann in pre_anns:
-            #     if pre_ann['iscrowd'] == 1:
-            #         color = (255, 0, 0, 255)
-            #     else:
-            #         color = (0, 255, 0, 255)
-            #     __, bb_amodal = self._get_bbox_output(
-            #         pre_ann['bbox'], trans_input_pre, height, width)
-            #
-            #     bb = np.array(bb_amodal, np.int).copy()
-            #
-            #     img_draw.rectangle([(bb[0], bb[1]), (bb[2], bb[3])], fill=None,
-            #                        outline=color)
-            #     img_draw.text((bb[2], bb[3]), str(pre_ann['track_id']), fill=color)
-            #
-            # img_pil.save(f"/scratch2/scorpio/yixu/see_hm/coco/{pre_img_id:06}_pre.png")
-            # # mask_pil = Image.fromarray((np.clip(pre_hm[0] * 255, 0, 255)).astype(np.uint8))
-            # # mask_pil.save(f"/scratch2/scorpio/yixu/see_hm/{pre_img_id:06}_hm_pre.png")
-            # pad_pil = Image.fromarray((pre_padding_mask * 255).astype(np.uint8))
-            # pad_pil.save(f"/scratch2/scorpio/yixu/see_hm/coco/{pre_img_id:06}_pad_pre.png")
-            # # print("###################")
-            # # print('pre id: ', pre_img_id)
-            # # print('curr id: ', img_info['id'])
-            # # print("###################")
-            # # print()
-            # # # plot #
+        num_objs = min(len(anns), self.max_objs)
 
         ### init samples
-        self._init_ret(ret, gt_det)
+        self._init_ret(ret, gt_det, pre_track_info)
         # calib = self._get_calib(img_info, width, height)
+        # ############## check obj in trans image, no_trans 不使用原始信息 ###################### #
+        # 检查的情况出现在 使用trans image
+        # print("prev obj len", len(pre_track_ids))
+        no_trans = self.check_obj(
+            num_objs, anns, trans_output, height, width, pre_track_ids
+        )
+        if no_trans:
+            if opt.tracking:
+                # transform pre_image as standard input shape, todo warning pre_anns are not yet transformed
+                pre_img_no_trans, pre_padding_mask_no_trans = self._get_input(
+                    pre_image, trans_input=None,
+                    padding_mask=pre_pad_image
+                )
 
-        num_objs = min(len(anns), self.max_objs)
+                pre_hm, pre_cts, pre_track_ids, pre_track_info = self._get_pre_dets(
+                    pre_anns, (height/self.opt.input_h, width/self.opt.input_w), None, no_trans=True)
+                ret['image'] = inp_no_trans
+                ret['pad_mask'] = padding_mask_no_trans
+                ret['pre_img'] = pre_img_no_trans
+                ret['pre_pad_mask'] = pre_padding_mask_no_trans.astype(np.bool)
+                if opt.pre_hm:
+                    ret['pre_hm'] = pre_hm
+
         for k in range(num_objs):
             ann = anns[k]
             cls_id = int(self.cat_ids[ann['category_id']])
-            if cls_id > self.opt.num_classes or cls_id <= -999:
-                continue
+
             # get ground truth bbox in the output image plane,
             # bbox_amodal do not clip by ouput image size, bbox is clipped, todo !!!warning!!! the function performs cxcy2xyxy
             bbox, bbox_amodal = self._get_bbox_output(
-                ann['bbox'], trans_output, height, width)
-            if cls_id <= 0 or ('iscrowd' in ann and ann['iscrowd'] > 0):
-                self._mask_ignore_or_crowd(ret, cls_id, bbox)
-                # print('mask ignore or crowd.')
-                continue
+                ann['bbox'], trans_output, height, width, no_trans
+            )
+
+            if self.opt.remove_difficult:
+                if cls_id > self.opt.num_classes or cls_id <= -99 or \
+                        ('iscrowd' in ann and ann['iscrowd'] > 0):
+                    continue
+            else:
+                if cls_id > self.opt.num_classes or cls_id <= -99:
+                    continue
+            # if cls_id <= 0 or ('iscrowd' in ann and ann['iscrowd'] > 0):
+            #     self._mask_ignore_or_crowd(ret, cls_id, bbox)
+            #     # print('mask ignore or crowd.')
+            #     continue
 
             # todo warning track_ids are ids at t-1
+            # update sm_queue in this function
             self._add_instance(
                 ret, gt_det, k, cls_id, bbox, bbox_amodal, ann, trans_output, aug_s,
-                 pre_cts, pre_track_ids)
+                pre_cts, pre_track_ids, no_trans
+            )
+
+
+        # ################## pre-image show ##################
+        # pre_image_show = ret['pre_img'].copy().transpose(1, 2, 0)
+        # pre_image_show = cv2.resize(pre_image_show, (opt.output_w, opt.output_h))
+        # for i in pre_track_info:
+        #     frame_id, track_id, ctx, cty, w, h = i
+        #     cv2.rectangle(
+        #         pre_image_show,
+        #         (int(ctx - w / 2), int(cty - h / 2)),
+        #         (int(ctx + w / 2), int(cty + h / 2)),
+        #         (0, 0, 255), 1
+        #     )
+        #     cv2.putText(
+        #         pre_image_show, str(track_id),
+        #         (int(ctx + w / 2), int(cty - h / 2)), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+        #         (255, 0, 255), 1
+        #     )
+        # print("show pre image")
+        # cv2.imwrite(
+        #     f'/home/huangjinze/code/TransCenter_official/output/{img_info["frame_id"]}_pre.jpg',
+        #     pre_image_show * 255
+        # )
+        # ################## image show ##################
+        # img_show = ret['image'].copy().transpose(1, 2, 0)
+        # img_show = cv2.resize(img_show, (opt.output_w, opt.output_h))
+        # for i in ret['sm_queue'][self.max_objs:]:
+        #     frame_id, track_id, ctx, cty, w, h = i
+        #     cv2.rectangle(
+        #         img_show,
+        #         (int(ctx - w / 2), int(cty - h / 2)),
+        #         (int(ctx + w / 2), int(cty + h / 2)),
+        #         (0, 0, 255), 1
+        #     )
+        #     cv2.putText(
+        #         img_show, str(track_id),
+        #         (int(ctx + w / 2), int(cty - h / 2)), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+        #         (255, 0, 255), 1
+        #     )
+        # print("show current image")
+        # cv2.imwrite(
+        #     f'/home/huangjinze/code/TransCenter_official/output/{img_info["frame_id"]}_curr.jpg',
+        #     img_show * 255
+        # )
+        # if no_trans:
+        #     exit(3333)
+        ################## image show ##################
 
         if self.opt.debug > 0:
             gt_det = self._format_gt_det(gt_det)
@@ -339,8 +368,8 @@ class GenericDataset(data.Dataset):
             img, anns, img_info, img_path = self._load_image_anns(img_id, coco, img_dir)
         # padding before affine warping to prevent cropping
         h, w, c = img.shape
-        target_ratio = 1.0*self.opt.input_w/self.opt.input_h
-        if 1.0*w/h < target_ratio:
+        target_ratio = 1.0 * self.opt.input_w / self.opt.input_h
+        if 1.0 * w / h < target_ratio:
             new_w = int(target_ratio * h)
             new_img = np.zeros((h, new_w, c)).astype(img.dtype)
             new_img[:, :w, :] = img
@@ -351,7 +380,6 @@ class GenericDataset(data.Dataset):
             new_img = img
 
         # print(img_info)
-
         return new_img, anns, img_info, img_path, np.ones_like(img)
 
     def _load_pre_data(self, video_id, frame_id, sensor_id=1):
@@ -359,10 +387,12 @@ class GenericDataset(data.Dataset):
         # If training, random sample nearby frames as the "previous" frame
         # If testing, get the exact prevous frame
         if 'train' in self.split:
-            img_ids = [(img_info['id'], img_info['frame_id']) \
-                       for img_info in img_infos \
-                       if abs(img_info['frame_id'] - frame_id) < self.opt.max_frame_dist and \
-                       (not ('sensor_id' in img_info) or img_info['sensor_id'] == sensor_id)]
+            img_ids = [
+                (img_info['id'], img_info['frame_id']) for img_info in img_infos \
+                if abs(img_info['frame_id'] - frame_id) < self.opt.max_frame_dist and \
+                   abs(img_info['frame_id'] - frame_id) > 0 and \
+                   (not ('sensor_id' in img_info) or img_info['sensor_id'] == sensor_id)
+            ]
         else:
             img_ids = [(img_info['id'], img_info['frame_id']) \
                        for img_info in img_infos \
@@ -375,9 +405,13 @@ class GenericDataset(data.Dataset):
                            (not ('sensor_id' in img_info) or img_info['sensor_id'] == sensor_id)]
         rand_id = np.random.choice(len(img_ids))
 
+        # print(f"frame_id {frame_id}")
+        # print(f"no {rand_id} in {img_ids}")
+
         img_id, pre_frame_id = img_ids[rand_id]
         frame_dist = abs(frame_id - pre_frame_id)
-        # print(frame_dist)
+
+        # print(f"frame_dist {frame_dist}")
         if img_id in self.cache.keys():
             img, anns, _, _ = self.cache[img_id]
         else:
@@ -395,28 +429,40 @@ class GenericDataset(data.Dataset):
             new_img = img
         return new_img, anns, frame_dist, img_id, np.ones_like(img)
 
-    def _get_pre_dets(self, anns, trans_input, trans_output):
+    def _get_pre_dets(self, anns, trans_input, trans_output, no_trans):
         hm_h, hm_w = self.opt.input_h, self.opt.input_w
         down_ratio = self.opt.down_ratio
         trans = trans_input
         reutrn_hm = self.opt.pre_hm
         pre_hm = np.zeros((1, hm_h, hm_w), dtype=np.float32) if reutrn_hm else None
+
+        pre_track_info = np.zeros((len(anns), 6), dtype=np.float32)
         pre_cts, track_ids = [], []
-        for ann in anns:
+        for idx, ann in enumerate(anns):
             cls_id = int(self.cat_ids[ann['category_id']])
-            if cls_id > self.opt.num_classes or cls_id <= -99 or \
-                    ('iscrowd' in ann and ann['iscrowd'] > 0):
-                continue
+            if self.opt.remove_difficult:
+                if cls_id > self.opt.num_classes or cls_id <= -99 or \
+                        ('iscrowd' in ann and ann['iscrowd'] > 0):
+                    continue
+            else:
+                if cls_id > self.opt.num_classes or cls_id <= -99:
+                    continue
+
             bbox = self._coco_box_to_bbox(ann['bbox'])
-            # from original input image size to standard input size using draw_umich_gaussian
-            bbox[:2] = affine_transform(bbox[:2], trans)
-            bbox[2:] = affine_transform(bbox[2:], trans)
-            bbox[[0, 2]] = np.clip(bbox[[0, 2]], 0, hm_w - 1)
-            bbox[[1, 3]] = np.clip(bbox[[1, 3]], 0, hm_h - 1)
+            if no_trans:
+                # from original input image size to standard input size using resize
+                bbox[[0, 2]] = bbox[[0, 2]] / trans_input[1]
+                bbox[[1, 3]] = bbox[[1, 3]] / trans_input[0]
+            else:
+                # from original input image size to standard input size using draw_umich_gaussian
+                bbox[:2] = affine_transform(bbox[:2], trans)
+                bbox[2:] = affine_transform(bbox[2:], trans)
+                bbox[[0, 2]] = np.clip(bbox[[0, 2]], 0, hm_w - 1)
+                bbox[[1, 3]] = np.clip(bbox[[1, 3]], 0, hm_h - 1)
             h, w = bbox[3] - bbox[1], bbox[2] - bbox[0]
             max_rad = 1
             # draw gt heatmap with
-            if (h > 0 and w > 0):
+            if h > 0 and w > 0:
                 radius = gaussian_radius((math.ceil(h), math.ceil(w)))
                 radius = max(0, int(radius))
                 max_rad = max(max_rad, radius)
@@ -432,11 +478,32 @@ class GenericDataset(data.Dataset):
                 ct_int = ct.astype(np.int32)
                 if conf == 0:
                     pre_cts.append(ct / down_ratio)
+                    pre_track_info[idx] = np.asarray(
+                        [
+                            ann['image_id'], ann['track_id'],
+                            ct[0] / down_ratio, ct[1] / down_ratio,
+                            w / down_ratio, h / down_ratio
+                         ],
+                        dtype=np.float32
+                    )
                 else:
                     pre_cts.append(ct0 / down_ratio)
+                    pre_track_info[idx] = np.asarray(
+                        [
+                            ann['image_id'], ann['track_id'],
+                            ct0[0] / down_ratio, ct0[1] / down_ratio,
+                            w / down_ratio,
+                         h / down_ratio],
+                        dtype=np.float32
+                    )
 
                 # conf == 0, lost hm, FN
-                track_ids.append(ann['track_id'] if 'track_id' in ann else -1)
+                if 'track_id' in ann:
+                    track_ids.append(ann['track_id'])
+                else:
+                    track_ids.append(-1)
+
+                # track_ids.append(ann['track_id'] if 'track_id' in ann else -1)
                 if reutrn_hm:
                     draw_umich_gaussian(pre_hm[0], ct_int, radius, k=conf)
 
@@ -448,7 +515,8 @@ class GenericDataset(data.Dataset):
                     ct2[1] = ct2[1] + np.random.randn() * 0.05 * h
                     ct2_int = ct2.astype(np.int32)
                     draw_umich_gaussian(pre_hm[0], ct2_int, radius, k=conf)
-        return pre_hm, pre_cts, track_ids
+
+        return pre_hm, pre_cts, track_ids, pre_track_info
 
     def _get_border(self, border, size):
         i = 1
@@ -462,7 +530,7 @@ class GenericDataset(data.Dataset):
             cf = self.cf
 
             if type(s) == float or type(s) == np.float64 or type(s) == np.float32:
-              s = [s, s]
+                s = [s, s]
             c[0] += s[0] * np.clip(np.random.randn() * cf, -2 * cf, 2 * cf)
             c[1] += s[1] * np.clip(np.random.randn() * cf, -2 * cf, 2 * cf)
             aug_s = np.clip(np.random.randn() * sf + 1, 1 - sf, 1 + sf)
@@ -471,7 +539,7 @@ class GenericDataset(data.Dataset):
             cf = self.opt.shift
             # print(s)
             if type(s) == float or type(s) == np.float64 or type(s) == np.float32:
-              s = [s, s]
+                s = [s, s]
             c[0] += s[0] * np.clip(np.random.randn() * cf, -2 * cf, 2 * cf)
             c[1] += s[1] * np.clip(np.random.randn() * cf, -2 * cf, 2 * cf)
             aug_s = np.clip(np.random.randn() * sf + 1, 1 - sf, 1 + sf)
@@ -507,21 +575,28 @@ class GenericDataset(data.Dataset):
             if 'amodel_offset' in self.opt.heads and 'amodel_center' in anns[k]:
                 anns[k]['amodel_center'][0] = width - anns[k]['amodel_center'][0] - 1
 
-
         return anns
 
-    def _get_input(self, img, trans_input, padding_mask=None):
+    def _get_input(self, img, trans_input=None, padding_mask=None):
         img = img.copy()
         if padding_mask is None:
             padding_mask = np.ones_like(img)
-        inp = cv2.warpAffine(img, trans_input,
-                             (self.opt.input_w, self.opt.input_h),
-                             flags=cv2.INTER_LINEAR)
+        # 实现从原始image 到 标准输入的变换
+        if trans_input is not None:
+            inp = cv2.warpAffine(img, trans_input,
+                                 (self.opt.input_w, self.opt.input_h),
+                                 flags=cv2.INTER_LINEAR)
 
-        # to mask = 1 (padding part), not to mask = 0
-        affine_padding_mask = cv2.warpAffine(padding_mask, trans_input,
-                                             (self.opt.input_w, self.opt.input_h),
-                                             flags=cv2.INTER_LINEAR)
+            # to mask = 1 (padding part), not to mask = 0
+            affine_padding_mask = cv2.warpAffine(padding_mask, trans_input,
+                                                 (self.opt.input_w, self.opt.input_h),
+                                                 flags=cv2.INTER_LINEAR)
+        else:
+            inp = cv2.resize(img, (self.opt.input_w, self.opt.input_h))
+
+            # to mask = 1 (padding part), not to mask = 0
+            affine_padding_mask = cv2.resize(padding_mask, (self.opt.input_w, self.opt.input_h))
+
         affine_padding_mask = affine_padding_mask[:, :, 0]
         affine_padding_mask[affine_padding_mask > 0] = 1
 
@@ -532,8 +607,17 @@ class GenericDataset(data.Dataset):
         inp = inp.transpose(2, 0, 1)
         return inp, 1 - affine_padding_mask
 
-    def _init_ret(self, ret, gt_det):
+    def _init_ret(self, ret, gt_det, pre_track_info=None):
         max_objs = self.max_objs * self.opt.dense_reg
+        if self.opt.cl_appearance:
+            # frame_id(1), track_id(1), xywh(4) in frame_id frame
+            ret['sm_queue'] = np.zeros(
+                (max_objs*2, 6), dtype=np.float32
+            )
+            if pre_track_info is not None:
+                for idx, k in enumerate(pre_track_info):
+                    ret['sm_queue'][idx] = k
+
         ret['hm'] = np.zeros(
             (self.opt.num_classes, self.opt.output_h, self.opt.output_w),
             np.float32)
@@ -612,15 +696,18 @@ class GenericDataset(data.Dataset):
                         dtype=np.float32)
         return bbox
 
-    def _get_bbox_output(self, bbox, trans_output, height, width):
+    def _get_bbox_output(self, bbox, trans_output, height, width, no_trans=False):
         bbox = self._coco_box_to_bbox(bbox).copy()
-
-        rect = np.array([[bbox[0], bbox[1]], [bbox[0], bbox[3]],
+        if no_trans:
+            bbox[[0, 2]] = bbox[[0, 2]] / (width / self.opt.input_w) / self.opt.down_ratio
+            bbox[[1, 3]] = bbox[[1, 3]] / (height / self.opt.input_h) / self.opt.down_ratio
+        else:
+            rect = np.array([[bbox[0], bbox[1]], [bbox[0], bbox[3]],
                          [bbox[2], bbox[3]], [bbox[2], bbox[1]]], dtype=np.float32)
-        for t in range(4):
-            rect[t] = affine_transform(rect[t], trans_output)
-        bbox[:2] = rect[:, 0].min(), rect[:, 1].min()
-        bbox[2:] = rect[:, 0].max(), rect[:, 1].max()
+            for t in range(4):
+                rect[t] = affine_transform(rect[t], trans_output)
+            bbox[:2] = rect[:, 0].min(), rect[:, 1].min()
+            bbox[2:] = rect[:, 0].max(), rect[:, 1].max()
 
         bbox_amodal = copy.deepcopy(bbox)
         bbox[[0, 2]] = np.clip(bbox[[0, 2]], 0, self.opt.output_w - 1)
@@ -629,13 +716,15 @@ class GenericDataset(data.Dataset):
 
     def _add_instance(
             self, ret, gt_det, k, cls_id, bbox, bbox_amodal, ann, trans_output,
-            aug_s,  pre_cts=None, pre_track_ids=None):
+            aug_s, pre_cts=None, pre_track_ids=None, no_trans=False):
 
         # box is in the output image plane, add it to gt heatmap
         h, w = bbox_amodal[3] - bbox_amodal[1], bbox_amodal[2] - bbox_amodal[0]
+        # if no_trans:
+        #     print("using no trans image in _add_instance")
+
         h_clip, w_clip = bbox[3] - bbox[1], bbox[2] - bbox[0]
-        if h_clip <= 0 or w_clip <= 0:
-            return
+
         # print(k)
         radius = gaussian_radius((math.ceil(h_clip), math.ceil(w_clip)))
         radius = max(0, int(radius))
@@ -704,6 +793,16 @@ class GenericDataset(data.Dataset):
             else:
                 gt_det['tracking'].append(np.zeros(2, np.float32))
 
+        if self.opt.cl_appearance:
+            # get current center pos
+            max_obj = ret['ind'].shape[0]
+            ret['sm_queue'][max_obj+k] = np.asarray([ann['image_id'],
+                                                     ann['track_id'],
+                                                     0.5 * (bbox_amodal[0] + bbox_amodal[2]),
+                                                     0.5 * (bbox_amodal[1] + bbox_amodal[3]),
+                                                     bbox_amodal[2] - bbox_amodal[0],
+                                                     bbox_amodal[3] - bbox_amodal[1]], dtype=np.float32)
+
     def _format_gt_det(self, gt_det):
         if (len(gt_det['scores']) == 0):
             gt_det = {'bboxes': np.array([[0, 0, 1, 1]], dtype=np.float32),
@@ -730,3 +829,35 @@ class GenericDataset(data.Dataset):
 
         for i in range(len(self.coco.dataset['annotations'])):
             self.coco.dataset['annotations'][i]['track_id'] = i + 1
+
+    def check_obj(
+            self,
+            num_objs, current_anns, trans_output, height, width,
+            pre_track_ids
+    ):
+        no_used_anno = 0
+        for k in range(num_objs):
+            ann = current_anns[k]
+            bbox, bbox_amodal = self._get_bbox_output(
+                ann['bbox'], trans_output, height, width
+            )
+            h_clip, w_clip = bbox[3] - bbox[1], bbox[2] - bbox[0]
+            if h_clip <= 0 or w_clip <= 0:
+                no_used_anno += 1
+
+        # print("current useful obj", no_used_anno - len(current_anns))
+        if self.opt.tracking:
+            # if len(pre_track_ids) == 0:
+            #     print("no obj in previous frame")
+            # if no_used_anno == len(current_anns):
+            #     print("no obj in current frame")
+            if len(pre_track_ids) == 0 or no_used_anno == len(current_anns):
+                no_trans = True
+            else:
+                no_trans = False
+        else:
+            if no_used_anno == len(current_anns):
+                no_trans = True
+            else:
+                no_trans = False
+        return no_trans

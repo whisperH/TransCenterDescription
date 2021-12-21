@@ -62,7 +62,8 @@ def get_args_parser():
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--lr_linear_proj_names', default=['reference_points', 'sampling_offsets'], type=str, nargs='+')
     parser.add_argument('--lr_linear_proj_mult', default=0.1, type=float)
-    parser.add_argument('--batch_size', default=2, type=int)
+    # parser.add_argument('--batch_size', default=2, type=int)
+    parser.add_argument('--batch_size', default=1, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--epochs', default=50, type=int)
     parser.add_argument('--lr_drop', default=40, type=int)
@@ -86,26 +87,28 @@ def get_args_parser():
     parser.add_argument('--position_embedding_scale', default=2 * np.pi, type=float,
                         help="position / size * scale")
     parser.add_argument('--num_feature_levels', default=4, type=int, help='number of feature levels')
-    # parser.add_argument('--num_feature_levels', default=2, type=int, help='number of feature levels')
     parser.add_argument('--learnable_queries', action='store_true',
                         help="If true, we use learnable parameters.")
 
     # * Transformer
-    # parser.add_argument('--enc_layers', default=6, type=int,
-    parser.add_argument('--enc_layers', default=2, type=int,
+    parser.add_argument('--enc_layers', default=4, type=int,
+    # parser.add_argument('--enc_layers', default=2, type=int,
                         help="Number of encoding layers in the transformer")
-    # parser.add_argument('--dec_layers', default=6, type=int,
-    parser.add_argument('--dec_layers', default=2, type=int,
+    parser.add_argument('--dec_layers', default=4, type=int,
+    # parser.add_argument('--dec_layers', default=2, type=int,
                         help="Number of decoding layers in the transformer")
-    parser.add_argument('--dim_feedforward', default=1024, type=int,
+    parser.add_argument('--dim_feedforward', default=512, type=int,
+    # parser.add_argument('--dim_feedforward', default=32, type=int,
                         help="Intermediate size of the feedforward layers in the transformer blocks")
-    parser.add_argument('--hidden_dim', default=256, type=int,
+    # parser.add_argument('--hidden_dim', default=32, type=int,
+    parser.add_argument('--hidden_dim', default=128, type=int,
                         help="Size of the embeddings (dimension of the transformer)")
     parser.add_argument('--dropout', default=0.1, type=float,
                         help="Dropout applied in the transformer")
-    parser.add_argument('--nheads', default=8, type=int,
+    parser.add_argument('--nheads', default=4, type=int,
+    # parser.add_argument('--nheads', default=2, type=int,
                         help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_queries', default=300, type=int,
+    parser.add_argument('--num_queries', default=100, type=int,
                         help="Number of query slots")
     parser.add_argument('--dec_n_points', default=4, type=int)
     parser.add_argument('--enc_n_points', default=4, type=int)
@@ -117,10 +120,15 @@ def get_args_parser():
                         help="Train segmentation head if the flag is provided")
 
     # Loss
+    parser.add_argument('--cl_appearance', default=True, action='store_false',
+                        help="learning appearance by contrast learning ")
+    parser.add_argument('--tau', default=0.05, type=float,
+                        help="hyper parameters of Contrastive Learning")
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                         help="Disables auxiliary decoding losses (loss at each layer)")
 
     # * Loss coefficients
+    parser.add_argument('--ctr_weight', default=1, type=float)
     parser.add_argument('--hm_weight', default=1, type=float)
     parser.add_argument('--off_weight', default=1, type=float)
     parser.add_argument('--wh_weight', default=0.1, type=float)
@@ -135,7 +143,7 @@ def get_args_parser():
     parser.add_argument('--data_dir', default='/home/data/HJZ/MOT/MOT17', type=str)
 
     parser.add_argument('--coco_panargsic_path', type=str)
-    parser.add_argument('--remove_difficult', action='store_true')
+    parser.add_argument('--remove_difficult', default=True, action='store_true')
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
@@ -143,12 +151,13 @@ def get_args_parser():
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=1, type=int)
 
-    # parser.add_argument('--resume', default='./model_zoo/MOT17_fromCoCo.pth', help='resume from checkpoint')
-    parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('--resume', default='/home/huangjinze/code/TransCenter_official/output/CL/checkpoint0003.pth', help='resume from checkpoint')
+    # parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
-    parser.add_argument('--eval', default=True, action='store_true')
-    parser.add_argument('--num_workers', default=2, type=int)
+    parser.add_argument('--eval', action='store_true')
+    # parser.add_argument('--num_workers', default=2, type=int)
+    parser.add_argument('--num_workers', default=1, type=int)
     parser.add_argument('--cache_mode', default=False, action='store_true', help='whether to cache images on memory')
 
 
@@ -162,7 +171,7 @@ def get_args_parser():
                              help='include validation in training and '
                                   'test on test set')
 
-    parser.add_argument('--K', type=int, default=300,
+    parser.add_argument('--K', type=int, default=100,
                              help='max number of output objects.')
 
     parser.add_argument('--debug', action='store_true')
@@ -174,10 +183,10 @@ def get_args_parser():
     parser.add_argument('--not_max_crop', action='store_true',
                              help='used when the training dataset has'
                                   'inbalanced aspect ratios.')
-    parser.add_argument('--shift', type=float, default=0.05,
+    parser.add_argument('--shift', type=float, default=0,
                              help='when not using random crop'
                                   'apply shift augmentation.')
-    parser.add_argument('--scale', type=float, default=0.05,
+    parser.add_argument('--scale', type=float, default=0,
                              help='when not using random crop'
                                   'apply scale augmentation.')
     parser.add_argument('--rotate', type=float, default=0,
@@ -258,7 +267,7 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    model, criterion, postprocessors = build_model(args)
+    model, criterion, postprocessors, matcher = build_model(args)
     model.to(device)
 
     model_without_ddp = model
@@ -337,7 +346,11 @@ def main(args):
 
     if args.frozen_weights is not None:
         checkpoint = torch.load(args.frozen_weights, map_location='cpu')
-        model_without_ddp.detr.load_state_dict(checkpoint['model'])
+        # model_without_ddp.detr.load_state_dict(checkpoint['model'])
+        model_without_ddp.detr.load_state_dict(
+            {k.replace('module.',''):v for k, v in checkpoint['model'].items()}
+        )
+
 
     output_dir = Path(args.output_dir)
     if args.resume:
@@ -346,8 +359,11 @@ def main(args):
                 args.resume, map_location='cpu', check_hash=True)
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
+        model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
+        # model_without_ddp.load_state_dict(
+        #     {k.replace('module.',''):v for k, v in checkpoint['model'].items()}
+        # )
 
-        model_without_ddp.load_state_dict(checkpoint['model'])
         missing_keys = []
         unexpected_keys = []
         print("resume: ", args.resume)
@@ -378,8 +394,9 @@ def main(args):
             args.start_epoch = checkpoint['epoch'] + 1
         # check the resumed model
         if not args.eval:
+            print("starting eval in first resume")
             test_stats, coco_evaluator = evaluate(
-                model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+                model, criterion, postprocessors, matcher, data_loader_val, base_ds, device, args.output_dir
             )
 
             # valbest save#
@@ -399,7 +416,7 @@ def main(args):
     
     if args.eval:
         torch.cuda.empty_cache()
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
+        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors, matcher,
                                               data_loader_val, base_ds, device, args.output_dir)
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
@@ -412,7 +429,7 @@ def main(args):
             sampler_train.set_epoch(epoch)
 
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, epoch, args.clip_max_norm, adaptive_clip=args.adaptive_clip)
+            model, criterion, matcher, data_loader_train, optimizer, device, epoch, args.clip_max_norm, adaptive_clip=args.adaptive_clip)
         lr_scheduler.step()
 
         if args.output_dir:
@@ -430,7 +447,7 @@ def main(args):
 
         if (epoch + 1) % 4 == 0:
             test_stats, coco_evaluator = evaluate(
-                model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+                model, criterion, postprocessors, matcher, data_loader_val, base_ds, device, args.output_dir
             )
 
             # xyh, valbest save#

@@ -17,7 +17,7 @@
 ## along with this program, TransCenter.  If not, see <http://www.gnu.org/licenses/> and the LICENSE file.
 ##
 ##
-# gather https://zhuanlan.zhihu.com/p/352877584
+# https://zhuanlan.zhihu.com/p/352877584
 ## TransCenter has code derived from
 ## (1) 2020 fundamentalvision.(Apache License 2.0: https://github.com/fundamentalvision/Deformable-DETR)
 ## (2) 2020 Philipp Bergmann, Tim Meinhardt. (GNU General Public License v3.0 Licence: https://github.com/phil-bergmann/tracking_wo_bnw)

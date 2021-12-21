@@ -84,19 +84,19 @@ def get_args_parser():
                         help="If true, we use learnable parameters.")
 
     # * Transformer
-    parser.add_argument('--enc_layers', default=6, type=int,
+    parser.add_argument('--enc_layers', default=4, type=int,
                         help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=6, type=int,
+    parser.add_argument('--dec_layers', default=4, type=int,
                         help="Number of decoding layers in the transformer")
-    parser.add_argument('--dim_feedforward', default=1024, type=int,
+    parser.add_argument('--dim_feedforward', default=512, type=int,
                         help="Intermediate size of the feedforward layers in the transformer blocks")
-    parser.add_argument('--hidden_dim', default=256, type=int,
+    parser.add_argument('--hidden_dim', default=128, type=int,
                         help="Size of the embeddings (dimension of the transformer)")
     parser.add_argument('--dropout', default=0.1, type=float,
                         help="Dropout applied in the transformer")
-    parser.add_argument('--nheads', default=8, type=int,
+    parser.add_argument('--nheads', default=4, type=int,
                         help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_queries', default=300, type=int,
+    parser.add_argument('--num_queries', default=100, type=int,
                         help="Number of query slots")
     parser.add_argument('--dec_n_points', default=4, type=int)
     parser.add_argument('--enc_n_points', default=4, type=int)
@@ -150,7 +150,7 @@ def get_args_parser():
                              help='include validation in training and '
                                   'test on test set')
 
-    parser.add_argument('--K', type=int, default=300,
+    parser.add_argument('--K', type=int, default=100,
                              help='max number of output objects.')
 
     parser.add_argument('--debug', action='store_true')
@@ -271,7 +271,7 @@ def main(tracktor, reid):
     # load reid network
     reid_network = resnet50(pretrained=False, **reid['cnn'])
     print(f"Loading Reid Model {tracktor['reid_weights']}")
-    reid_network.load_state_dict(torch.load(curr_pth + "./model_zoo/" + tracktor['reid_weights'],
+    reid_network.load_state_dict(torch.load(curr_pth + "/model_zoo/" + tracktor['reid_weights'],
                                             map_location=lambda storage, loc: storage))
     reid_network.eval()
     reid_network.cuda()
@@ -291,11 +291,11 @@ def main(tracktor, reid):
 
     models = [
         # "./model_zoo/MOT17_fromCoCo.pth",
-        curr_pth + "./model_zoo/MOT17_fromCH.pth"
+        curr_pth + "/model_zoo/MOT17_fromCH.pth"
     ]
     output_dirs = [
         # curr_pth + '/test_models/mot17_fromCoCo_test_private/',
-        curr_pth + './test_models/mot17_fromCH_test_private/',
+        curr_pth + '/test_models/mot17_fromCH_test_private/',
 
     ]
 
@@ -409,10 +409,10 @@ def main(tracktor, reid):
             del pub_dets
 
 
-with open(curr_pth + './cfgs/detracker_reidV3.yaml', 'r') as f:
+with open(curr_pth + '/cfgs/detracker_reidV3.yaml', 'r') as f:
     tracktor = yaml.load(f)['tracktor']
 
-with open(curr_pth+ './cfgs/reid.yaml', 'r') as f:
+with open(curr_pth+ '/cfgs/reid.yaml', 'r') as f:
     reid = yaml.load(f)['reid']
     # print(reid)
 

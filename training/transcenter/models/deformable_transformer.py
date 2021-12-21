@@ -71,7 +71,7 @@ class DeformableTransformer(nn.Module):
         self.level_embed_decoder = nn.Parameter(torch.Tensor(num_feature_levels, d_model))
         self.level_embed_decoder_pre = nn.Parameter(torch.Tensor(num_feature_levels, d_model))
 
-        # my_ffn
+        # my_ffn: QLN module
         self.linear1 = nn.Linear(d_model, 512)
         self.activation = _get_activation_fn(activation)
         self.dropout2 = nn.Dropout(dropout)
@@ -133,17 +133,22 @@ class DeformableTransformer(nn.Module):
 
         spatial_shapes = []  # save spatial shape of each level/scale
 
+        # 这里遍历的是 resnet特征图 中的值： 4
         # lvl => feat scale lvl
         for lvl, (src, mask, pos_embed, pre_src, pre_mask, pre_pos_embed) in enumerate(
                 zip(srcs, masks, pos_embeds, pre_srcs, pre_masks, pre_pos_embeds)):
             # print("pos_embed shape", pos_embed.shape)
             assert pre_src.shape == src.shape
+            # bs:1 c:32 h:40 w:68
             bs, c, h, w = src.shape
+            # spatial_shape = (40,68)
             spatial_shape = (h, w)
+            # spatial_shapes:[(40,68)]
             spatial_shapes.append(spatial_shape)
-            src_flatten.append(src.flatten(2).transpose(1, 2))
-            mask_flatten.append(mask.flatten(1))
-            pos_embed = pos_embed.flatten(2).transpose(1, 2)
+
+            src_flatten.append(src.flatten(2).transpose(1, 2)) # src_flatten:(1,10880,32)
+            mask_flatten.append(mask.flatten(1)) # mask_flatten:(1, 10880)
+            pos_embed = pos_embed.flatten(2).transpose(1, 2) #pos_embed(1,32,40,68)->(1,10880,32)
             lvl_pos_embed_flatten.append(pos_embed + self.level_embed[lvl].view(1, 1, -1))
             lvl_pos_embed_flatten_decoder.append(pos_embed + self.level_embed_decoder[lvl].view(1, 1, -1))
 
@@ -169,24 +174,39 @@ class DeformableTransformer(nn.Module):
         # xyh #
         lvl_pos_embed_flatten_decoder = torch.cat(lvl_pos_embed_flatten_decoder, 1)
         spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=src_flatten.device)
-        level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        level_start_index = torch.cat(
+            (
+                spatial_shapes.new_zeros((1,)),
+                spatial_shapes.prod(1).cumsum(0)[:-1]
+            )
+        )
 
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
-        # encoder
+        # encoder 对应variable：Mt
         memory = self.encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten,
                               mask_flatten)
+        # 对应variable：Mt-1
         with torch.no_grad():
             pre_memory = self.encoder(pre_src_flatten, spatial_shapes, level_start_index, pre_valid_ratios,
                                       pre_lvl_pos_embed_flatten, pre_mask_flatten)
 
-        # prepare input for decoder #
+        # prepare input for decoder # output of QLN in detection branch
+        # query_embed detach之后，返回一个新的Variable，从当前计算图中分离下来的，但是仍指向原变量的存放位置,
+        # 不同之处只是requires_grad为false，得到的这个Variable永远不需要计算其梯度，不具有grad。
         query_embed = self.my_forward_ffn(memory.detach())
-        pre_query_embed = self.curr_pre_dropout(self.activation(self.curr_pre(query_embed.detach())))
+        # prepare input for decoder # output of QLN in tracking branch
+        pre_query_embed = self.curr_pre_dropout(self.activation(self.curr_pre(
+            query_embed.detach()
+        )))
 
         tgt = query_embed
         pre_tgt = pre_query_embed
-        reference_points = self.encoder.get_reference_points(spatial_shapes, valid_ratios, src.device)
-        pre_reference_points = self.encoder.get_reference_points(spatial_shapes, pre_valid_ratios, pre_src.device)
+        reference_points = self.encoder.get_reference_points(
+            spatial_shapes, valid_ratios, src.device
+        )
+        pre_reference_points = self.encoder.get_reference_points(
+            spatial_shapes, pre_valid_ratios, pre_src.device
+        )
 
         # decoder
 
@@ -389,6 +409,7 @@ class DeformableTransformerDecoder(nn.Module):
         pre_output = pre_tgt
         intermediate = []
 
+        # decode每一层的输出两个值：split 和 pre-split
         for lid, layer in enumerate(self.layers):
             output, pre_output = layer(tgt=output, pre_tgt=pre_output, query_pos=query_pos, pre_query_pos=pre_query_pos,
                                        reference_points=reference_points, src=src,
@@ -408,7 +429,7 @@ class DeformableTransformerDecoder(nn.Module):
 
         if self.return_intermediate:
             return intermediate, None
-
+        print("not reture intermediate of decoder")
         return output, reference_points
 
 

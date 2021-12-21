@@ -105,11 +105,12 @@ def _topk(scores, K=100):
   batch, cat, height, width = scores.size()
 
   topk_scores, topk_inds = torch.topk(scores.view(batch, cat, -1), K)
-
+  # 每一个坐标在图像中的偏移量（应该小于height * width)
   topk_inds = topk_inds % (height * width)
   topk_ys   = (topk_inds / width).int().float()
   topk_xs   = (topk_inds % width).int().float()
 
+  # 沿给定dim维度返回输入张量input中 k 个最大值
   topk_score, topk_ind = torch.topk(topk_scores.view(batch, -1), K)
   topk_clses = (topk_ind / K).int()
   topk_inds = _gather_feat(
